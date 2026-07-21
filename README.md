@@ -1,4 +1,5 @@
 # PortMaster para RetroPie en Debian
+<img width="640" height="480" alt="Captura de pantalla_2026-07-21_17-28-53" src="https://github.com/user-attachments/assets/04568228-7d63-42d7-95fb-a32657fb7baf" />
 
 Módulo experimental de RetroPie-Setup para instalar y adaptar
 [PortMaster](https://github.com/PortsMaster/PortMaster-GUI) en Debian.
