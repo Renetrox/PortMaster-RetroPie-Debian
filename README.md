@@ -23,6 +23,10 @@ Probado actualmente en:
 - Corrige permisos y archivos creados como root.
 - Aplica ajustes específicos para Debian.
 - Corrige errores conocidos de `control.txt`.
+- Conecta la configuración de mandos de ES-X con PortMaster cuando está disponible.
+- Inicia la interfaz de PortMaster bajo X11 si RetroPie la abre desde una TTY y usa la resolución activa de X11.
+
+Estos ajustes se aplican a la interfaz de PortMaster; los juegos instalados conservan sus propios lanzadores. La compatibilidad de cada port y sus controles depende también del juego y de sus ejecutables.
 
 ## Instalación
 
@@ -37,12 +41,16 @@ chmod 644 ~/RetroPie-Setup/scriptmodules/ports/portmaster.sh
 
 cd ~/RetroPie-Setup
 sudo ./retropie_setup.sh
+```
 
 También puede instalarse directamente con:
 
+```bash
 cd ~/RetroPie-Setup
 sudo ./retropie_packages.sh portmaster
-Limitaciones
+```
+
+## Limitaciones
 
 PortMaster utiliza /dev/uinput para convertir las entradas del mando en
 teclas mediante gptokeyb.
@@ -52,20 +60,21 @@ pero algunos juegos deberán utilizar teclado o soporte de mando SDL nativo.
 
 El kernel oficial probado en Orange Pi 4A no ofrece actualmente /dev/uinput.
 
-Ports probados
-Port	Plataforma	Estado
-Banana Duck	Debian x86_64	Inicia
-ROTA	Debian x86_64	Inicia
-PortMaster GUI	Debian x86_64 / ARM64	En pruebas
-Maldita Castilla	Debian ARM64	En pruebas
-Créditos
-PortsMaster
-PortMaster-GUI
-RetroPie
-gptokeyb / gptokeyb2
+## Ports probados
+
+| Port | Plataforma | Estado |
+| --- | --- | --- |
+| Banana Duck | Debian x86_64 | Inicia |
+| ROTA | Debian x86_64 | Inicia |
+| PortMaster GUI | Debian x86_64 / ARM64 | En pruebas |
+| Maldita Castilla | Debian ARM64 | En pruebas |
+
+## Créditos
+
+PortsMaster, PortMaster-GUI, RetroPie y gptokeyb / gptokeyb2.
 
 Adaptación para Debian y RetroPie: Renetrox
 
-Licencia
+## Licencia
 
 MIT

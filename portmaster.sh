@@ -5,7 +5,7 @@
 
 rp_module_id="portmaster"
 rp_module_desc="PortMaster - Download and manage native Linux ports"
-rp_module_help="Installs PortMaster in RetroPie's Ports directory and maps /roms/ports to the active RetroPie ports folder. On non-ARM64 systems it can build a native gptokeyb2 when the bundled helper is incompatible."
+rp_module_help="Installs PortMaster in RetroPie's Ports directory, maps /roms/ports to the active RetroPie ports folder, bridges ES-X controller settings, and adapts the PortMaster GUI to X11 when RetroPie starts it from a TTY. On non-ARM64 systems it can build a native gptokeyb2 when the bundled helper is incompatible."
 rp_module_licence="MIT https://github.com/PortsMaster/PortMaster-GUI/blob/main/LICENSE"
 rp_module_section="exp"
 
@@ -29,6 +29,12 @@ function depends_portmaster() {
         squashfs-tools \
         python3
 
+    # PortMaster's SDL GUI needs an X11 session on desktop RetroPie/Debian.
+    # xrandr is also used to pass the real X11 size to pugwash.
+    getDepends \
+        xinit \
+        x11-xserver-utils
+
     # PortMaster currently supplies an appropriate helper on ARM64. Desktop
     # x86/x64 and other architectures may require a native local build.
     case "$(uname -m)" in
@@ -45,6 +51,96 @@ function depends_portmaster() {
                 libevdev-dev
             ;;
     esac
+}
+
+function _prepare_es_input_bridge_portmaster() {
+    local target_dir="$home/.config/emulationstation"
+    local target="$target_dir/es_input.cfg"
+    local source=""
+
+    if [[ -f "$home/.emulationstation/es_input.cfg" ]]; then
+        source="$home/.emulationstation/es_input.cfg"
+    elif [[ -f "/opt/retropie/configs/all/emulationstation/es_input.cfg" ]]; then
+        source="/opt/retropie/configs/all/emulationstation/es_input.cfg"
+    else
+        # PortMaster will retain its bundled SDL database until ES creates a
+        # controller configuration. This is not fatal during installation.
+        return 0
+    fi
+
+    mkdir -p "$target_dir" "$md_inst"
+
+    if [[ -e "$target" && ! -L "$target" ]]; then
+        if ! _same_directory_portmaster "$target" "$source"; then
+            md_ret_errors+=(
+                "$target already exists and was preserved. PortMaster may not use ES-X's controller mapping."
+            )
+            return 0
+        fi
+        return 0
+    fi
+
+    ln -sfn "$source" "$target"
+    printf '%s\n' "$source" > "$md_inst/es-input-bridge-source"
+}
+
+function _patch_x11_gui_launcher_portmaster() {
+    local launcher="$romdir/ports/PortMaster.sh"
+    local tmp=""
+
+    [[ -f "$launcher" ]] || return 1
+
+    # This patch is intentionally limited to PortMaster's GUI launcher. Ports
+    # downloaded by PortMaster keep their original display handling.
+    if ! grep -q '^# RETROPIE_PORTMASTER_X11_START$' "$launcher"; then
+        tmp="$(mktemp)" || return 1
+        awk '
+            {
+                print
+                if (!done && $0 ~ /^export XDG_DATA_HOME=/) {
+                    print ""
+                    print "# RETROPIE_PORTMASTER_X11_START"
+                    print "# Desktop RetroPie may launch Ports from a TTY. Re-enter this"
+                    print "# launcher as the client of a temporary X server when needed."
+                    print "if ! xrandr --current >/dev/null 2>&1; then"
+                    print "  if command -v startx >/dev/null 2>&1; then"
+                    print "    exec startx \"$0\" -- :1"
+                    print "  fi"
+                    print "fi"
+                    print "# RETROPIE_PORTMASTER_X11_START_END"
+                    done=1
+                }
+            }
+        ' "$launcher" > "$tmp" && cat "$tmp" > "$launcher"
+        rm -f "$tmp"
+    fi
+
+    if ! grep -q '^# RETROPIE_PORTMASTER_X11_SIZE$' "$launcher"; then
+        tmp="$(mktemp)" || return 1
+        awk '
+            {
+                print
+                if (!done && $0 ~ /^get_controls[[:space:]]*$/) {
+                    print ""
+                    print "# RETROPIE_PORTMASTER_X11_SIZE"
+                    print "# device_info uses PortMaster sdl_resolution; under a temporary"
+                    print "# X session the active xrandr mode is authoritative for the GUI."
+                    print "PM_X11_RESOLUTION=\"$(xrandr --current 2>/dev/null | awk '\''/\\*/ {print $1; exit}'\'')\""
+                    print "if [[ \"$PM_X11_RESOLUTION\" =~ ^([0-9]+)x([0-9]+)$ ]]; then"
+                    print "  export DISPLAY_WIDTH=\"${BASH_REMATCH[1]}\""
+                    print "  export DISPLAY_HEIGHT=\"${BASH_REMATCH[2]}\""
+                    print "  export PM_RETROPIE_X11_RESOLUTION=\"$PM_X11_RESOLUTION\""
+                    print "fi"
+                    print "unset PM_X11_RESOLUTION"
+                    print "# RETROPIE_PORTMASTER_X11_SIZE_END"
+                    done=1
+                }
+            }
+        ' "$launcher" > "$tmp" && cat "$tmp" > "$launcher"
+        rm -f "$tmp"
+    fi
+
+    chmod 755 "$launcher"
 }
 
 function _same_directory_portmaster() {
@@ -264,7 +360,29 @@ EOF
     chmod 644 "$mod_file"
 }
 
+
+function _normalize_launcher_name_portmaster() {
+    local ports_dir="$romdir/ports"
+    local official_launcher="$ports_dir/PortMaster.sh"
+    local alternate_launcher=""
+
+    [[ -f "$official_launcher" ]] && return 0
+
+    alternate_launcher="$(
+        find "$ports_dir" -maxdepth 1 -type f -iname 'portmaster.sh' \
+            ! -path "$official_launcher" -print -quit 2>/dev/null
+    )"
+
+    if [[ -n "$alternate_launcher" ]]; then
+        mv -f "$alternate_launcher" "$official_launcher"
+    fi
+
+    [[ -f "$official_launcher" ]]
+}
+
 function _fix_portmaster_install_portmaster() {
+    _normalize_launcher_name_portmaster || true
+
     local ports_dir="$romdir/ports"
     local pm_dir="$ports_dir/PortMaster"
     local official_launcher="$ports_dir/PortMaster.sh"
@@ -273,6 +391,7 @@ function _fix_portmaster_install_portmaster() {
     local pmsplash_file="$pm_dir/utils/pmsplash.txt"
 
     _install_debian_mod_portmaster
+    _patch_x11_gui_launcher_portmaster || return 1
 
     # Avoid "binary operator expected" when ESUDO contains several words.
     # Also guard the optional ArkOS file before trying to read it.
@@ -280,6 +399,7 @@ function _fix_portmaster_install_portmaster() {
         sed -i \
             -e 's~\[ -z \$ESUDO \]~[ -z "$ESUDO" ]~' \
             -e 's~\[ -f "/boot/rk3326-rg351v-linux.dtb" \] || \[ $(cat "/storage/.config/.OS_ARCH") == "RG351V" \]~[ -f "/boot/rk3326-rg351v-linux.dtb" ] || { [ -f "/storage/.config/.OS_ARCH" ] \&\& [ "$(cat "/storage/.config/.OS_ARCH")" = "RG351V" ]; }~' \
+            -e 's~^[[:space:]]*\$ESUDO chmod 666 /dev/uinput[[:space:]]*$~  [ -e /dev/uinput ] \&\& $ESUDO chmod 666 /dev/uinput~' \
             "$control_file"
 
         # A locally built helper replaces the architecture-specific upstream
@@ -307,7 +427,9 @@ function _fix_portmaster_install_portmaster() {
             -e 's|^export PYSDL2_DLL_PATH="/usr/lib"$|export PYSDL2_DLL_PATH="${PYSDL2_DLL_PATH:-/usr/lib}"|' \
             -e 's|^\([[:space:]]*\)\$ESUDO \.\/pugwash \$PORTMASTER_CMDS|\1./pugwash $PORTMASTER_CMDS|' \
             -e 's|^\([[:space:]]*\)\$ESUDO rm -f "${controlfolder}/.pugwash-reboot"|\1rm -f "${controlfolder}/.pugwash-reboot"|' \
-            -e 's|^\$ESUDO chmod -R +x \.$|chmod -R u+rwX,go+rX .|' \
+            -e 's|^\$ESUDO chmod -R +x \.$|: # permissions handled by RetroPie-Setup|' \
+            -e 's|^[[:space:]]*chmod -R u+rwX,go+rX \.[[:space:]]*$|: # permissions handled by RetroPie-Setup|' \
+            -e 's|^[[:space:]]*chmod -R u+rwX,go+rX "\$controlfolder"[[:space:]]*$|: # permissions handled by RetroPie-Setup|' \
             "$official_launcher"
     fi
 
@@ -319,21 +441,31 @@ function _fix_portmaster_install_portmaster() {
             "$pmsplash_file"
     fi
 
-    # Remove a stale update marker possibly created during an earlier
-    # root-owned first launch.
-    rm -f "$pm_dir/.pugwash-reboot"
+    # Determine the desktop account that owns RetroPie's Ports directory.
+    # Normally RetroPie-Setup supplies __user/__group. The stat fallback also
+    # covers modules launched from an already-root shell.
+    local target_user="${__user:-${user:-}}"
+    local target_group="${__group:-}"
 
-    chmod 755 "$official_launcher" 2>/dev/null || true
-    chmod -R u+rwX,go+rX "$pm_dir"
+    if [[ -z "$target_user" || "$target_user" == "root" ]]; then
+        target_user="$(stat -Lc '%U' "$ports_dir" 2>/dev/null || true)"
+    fi
 
-    # RetroPie-Setup runs as root, while EmulationStation runs as the selected
-    # account. Keep both PortMaster and its writable configuration user-owned.
-    if [[ "$__user" != "root" ]]; then
-        chown -R "$__user:$__group" "$pm_dir"
-        chown "$__user:$__group" \
+    if [[ -n "$target_user" && "$target_user" != "root" ]]; then
+        [[ -n "$target_group" && "$target_group" != "root" ]] ||
+            target_group="$(id -gn "$target_user")"
+
+        # Ownership must be corrected before the desktop launcher runs.
+        chown -R "$target_user:$target_group" "$pm_dir"
+        chown "$target_user:$target_group" \
             "$ports_dir/Install.PortMaster.sh" \
             "$official_launcher" 2>/dev/null || true
     fi
+
+    # Remove stale state and apply permissions once, during configuration.
+    rm -f "$pm_dir/.pugwash-reboot"
+    chmod -R u+rwX,go+rX "$pm_dir"
+    chmod 755 "$official_launcher" 2>/dev/null || true
 }
 
 function install_bin_portmaster() {
@@ -343,6 +475,7 @@ function install_bin_portmaster() {
     local official_launcher="$ports_dir/PortMaster.sh"
 
     _prepare_roms_link_portmaster || return 1
+    _prepare_es_input_bridge_portmaster || return 1
 
     download "$PORTMASTER_INSTALLER_URL" "$installer" || return 1
     chmod +x "$installer"
@@ -359,6 +492,8 @@ function install_bin_portmaster() {
     local ret=$?
     popd >/dev/null || true
     [[ "$ret" -eq 0 ]] || return "$ret"
+
+    _normalize_launcher_name_portmaster || true
 
     # PortMaster's actual installed layout has the launcher at the root of
     # roms/ports and its data/control files inside roms/ports/PortMaster.
@@ -401,10 +536,14 @@ function configure_portmaster() {
 
     [[ "$md_mode" == "remove" ]] && return
 
+    _normalize_launcher_name_portmaster || true
+
     if [[ ! -f "$official_launcher" || ! -f "$pm_dir/control.txt" ]]; then
         md_ret_errors+=("PortMaster is not installed correctly in $ports_dir.")
         return 1
     fi
+
+    _prepare_es_input_bridge_portmaster || return 1
 
     # Do not call addPort here: it would overwrite PortMaster's own launcher.
     # The Ports system already executes every .sh using `bash %ROM%`.
@@ -434,6 +573,18 @@ function remove_portmaster() {
     local remove_link=0
 
     [[ -f "$md_inst/created-roms-ports-link" ]] && remove_link=1
+
+    # Remove only the ES input symlink created by this module. Never remove a
+    # real configuration file or a link subsequently changed by the user.
+    if [[ -f "$md_inst/es-input-bridge-source" ]]; then
+        local es_input_source
+        es_input_source="$(< "$md_inst/es-input-bridge-source")"
+        if [[ -L "$home/.config/emulationstation/es_input.cfg" ]] &&
+           [[ "$(readlink "$home/.config/emulationstation/es_input.cfg")" == "$es_input_source" ]]; then
+            rm -f "$home/.config/emulationstation/es_input.cfg"
+            rmdir "$home/.config/emulationstation" 2>/dev/null || true
+        fi
+    fi
 
     # Remove PortMaster itself while preserving every installed game/port.
     rm -rf "$pm_dir"
