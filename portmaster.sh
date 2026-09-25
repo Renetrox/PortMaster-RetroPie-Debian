@@ -104,6 +104,7 @@ function _patch_x11_gui_launcher_portmaster() {
                     print "# launcher as the client of a temporary X server when needed."
                     print "if ! xrandr --current >/dev/null 2>&1; then"
                     print "  if command -v startx >/dev/null 2>&1; then"
+                    print "    export PM_RETROPIE_STARTED_X=1"
                     print "    exec startx \"$0\" -- :1"
                     print "  fi"
                     print "fi"
@@ -115,16 +116,24 @@ function _patch_x11_gui_launcher_portmaster() {
         rm -f "$tmp"
     fi
 
+    if ! grep -q '^    export PM_RETROPIE_STARTED_X=1$' "$launcher"; then
+        sed -i '/^    exec startx "\$0" -- :1$/i\    export PM_RETROPIE_STARTED_X=1' "$launcher"
+    fi
+
+    # Migrate the previous patch, which ran after get_controls.
+    sed -i '/^# RETROPIE_PORTMASTER_X11_SIZE$/,/^# RETROPIE_PORTMASTER_X11_SIZE_END$/d' "$launcher"
     if ! grep -q '^# RETROPIE_PORTMASTER_X11_SIZE$' "$launcher"; then
         tmp="$(mktemp)" || return 1
         awk '
             {
                 print
-                if (!done && $0 ~ /^get_controls[[:space:]]*$/) {
+                if (!done && $0 ~ /^source \$controlfolder\/control\.txt$/) {
                     print ""
                     print "# RETROPIE_PORTMASTER_X11_SIZE"
-                    print "# device_info uses PortMaster sdl_resolution; under a temporary"
-                    print "# X session the active xrandr mode is authoritative for the GUI."
+                    print "# Select the preferred X11 mode before PortMaster detects the display."
+                    print "if [[ \"${PM_RETROPIE_STARTED_X:-}\" == 1 ]]; then"
+                    print "  xrandr --auto >/dev/null 2>&1 || true"
+                    print "fi"
                     print "PM_X11_RESOLUTION=\"$(xrandr --current 2>/dev/null | awk '\''/\\*/ {print $1; exit}'\'')\""
                     print "if [[ \"$PM_X11_RESOLUTION\" =~ ^([0-9]+)x([0-9]+)$ ]]; then"
                     print "  export DISPLAY_WIDTH=\"${BASH_REMATCH[1]}\""
@@ -141,6 +150,45 @@ function _patch_x11_gui_launcher_portmaster() {
     fi
 
     chmod 755 "$launcher"
+}
+
+function _patch_pugwash_x11_portmaster() {
+    local pugwash="$romdir/ports/PortMaster/pugwash"
+    [[ -f "$pugwash" ]] || return 1
+
+    python3 - "$pugwash" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+marker = '        # RETROPIE_PORTMASTER_X11_RESOLUTION\n'
+if marker not in source:
+    anchor = '        # Create the window\n'
+    if source.count(anchor) != 1:
+        raise SystemExit('PortMaster GUI window anchor not found')
+    block = '''        # RETROPIE_PORTMASTER_X11_RESOLUTION
+        # Use the active X11 mode on desktop RetroPie/Debian.
+        import os as _pm_os
+        import re as _pm_re
+        _pm_mode = _pm_os.environ.get("PM_RETROPIE_X11_RESOLUTION", "")
+        _pm_match = _pm_re.fullmatch(r"([0-9]+)x([0-9]+)", _pm_mode)
+        if _pm_match:
+            capabilities = harbourmaster.device_info(
+                override_resolution=tuple(map(int, _pm_match.groups())))
+
+'''
+    source = source.replace(anchor, block + anchor, 1)
+
+old = '            window_flags = sdl2.SDL_WINDOW_FULLSCREEN\n'
+new = '            window_flags = sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP\n'
+if old in source:
+    source = source.replace(old, new, 1)
+elif new not in source:
+    raise SystemExit('PortMaster GUI fullscreen anchor not found')
+
+path.write_text(source)
+PY
 }
 
 function _same_directory_portmaster() {
@@ -392,6 +440,7 @@ function _fix_portmaster_install_portmaster() {
 
     _install_debian_mod_portmaster
     _patch_x11_gui_launcher_portmaster || return 1
+    _patch_pugwash_x11_portmaster || return 1
 
     # Avoid "binary operator expected" when ESUDO contains several words.
     # Also guard the optional ArkOS file before trying to read it.

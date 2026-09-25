@@ -25,6 +25,7 @@ Probado actualmente en:
 - Corrige errores conocidos de `control.txt`.
 - Conecta la configuración de mandos de ES-X con PortMaster cuando está disponible.
 - Inicia la interfaz de PortMaster bajo X11 si RetroPie la abre desde una TTY y usa la resolución activa de X11.
+- Ajusta la ventana de PortMaster al escritorio X11 en lugar de conservar la ventana de 640×480 del dispositivo genérico.
 
 Estos ajustes se aplican a la interfaz de PortMaster; los juegos instalados conservan sus propios lanzadores. La compatibilidad de cada port y sus controles depende también del juego y de sus ejecutables.
 
