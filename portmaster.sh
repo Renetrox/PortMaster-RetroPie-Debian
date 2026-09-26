@@ -513,14 +513,19 @@ function _fix_portmaster_install_portmaster() {
 
     # Keep the PortMaster GUI in the desktop user's X11 session. Do not run
     # pugwash as root, and manage its reboot marker as the owning user.
+    #
+    # PortMaster intentionally ships some helpers (notably gptokeyb and
+    # gptokeyb2) without an executable bit and fixes them from this launcher.
+    # Preserve that behaviour, but perform it as the owning desktop user.
     if [[ -f "$official_launcher" ]]; then
         sed -i \
             -e 's|^export PYSDL2_DLL_PATH="/usr/lib"$|export PYSDL2_DLL_PATH="${PYSDL2_DLL_PATH:-/usr/lib}"|' \
             -e 's|^\([[:space:]]*\)\$ESUDO \.\/pugwash \$PORTMASTER_CMDS|\1./pugwash $PORTMASTER_CMDS|' \
             -e 's|^\([[:space:]]*\)\$ESUDO rm -f "${controlfolder}/.pugwash-reboot"|\1rm -f "${controlfolder}/.pugwash-reboot"|' \
-            -e 's|^\$ESUDO chmod -R +x \.$|: # permissions handled by RetroPie-Setup|' \
-            -e 's|^[[:space:]]*chmod -R u+rwX,go+rX \.[[:space:]]*$|: # permissions handled by RetroPie-Setup|' \
-            -e 's|^[[:space:]]*chmod -R u+rwX,go+rX "\$controlfolder"[[:space:]]*$|: # permissions handled by RetroPie-Setup|' \
+            -e 's|^\$ESUDO chmod -R +x \.$|chmod -R a+x .|' \
+            -e 's|^: # permissions handled by RetroPie-Setup$|chmod -R a+x .|' \
+            -e 's|^[[:space:]]*chmod -R u+rwX,go+rX \.[[:space:]]*$|chmod -R a+x .|' \
+            -e 's|^[[:space:]]*chmod -R u+rwX,go+rX "\$controlfolder"[[:space:]]*$|chmod -R a+x "$controlfolder"|' \
             "$official_launcher"
     fi
 
@@ -553,9 +558,12 @@ function _fix_portmaster_install_portmaster() {
             "$official_launcher" 2>/dev/null || true
     fi
 
-    # Remove stale state and apply permissions once, during configuration.
+    # Remove stale state and apply permissions during configuration. The
+    # executable pass is required even before PortMaster's GUI is opened:
+    # installed ports can call gptokeyb directly from their own launchers.
     rm -f "$pm_dir/.pugwash-reboot"
     chmod -R u+rwX,go+rX "$pm_dir"
+    chmod -R a+x "$pm_dir"
     chmod 755 "$official_launcher" 2>/dev/null || true
 }
 
