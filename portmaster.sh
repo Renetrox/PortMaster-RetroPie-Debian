@@ -139,6 +139,7 @@ function _patch_x11_gui_launcher_portmaster() {
                     print "  export DISPLAY_WIDTH=\"${BASH_REMATCH[1]}\""
                     print "  export DISPLAY_HEIGHT=\"${BASH_REMATCH[2]}\""
                     print "  export PM_RETROPIE_X11_RESOLUTION=\"$PM_X11_RESOLUTION\""
+                    print "  export PM_RETROPIE_X11=1"
                     print "fi"
                     print "unset PM_X11_RESOLUTION"
                     print "# RETROPIE_PORTMASTER_X11_SIZE_END"
@@ -147,6 +148,11 @@ function _patch_x11_gui_launcher_portmaster() {
             }
         ' "$launcher" > "$tmp" && cat "$tmp" > "$launcher"
         rm -f "$tmp"
+    fi
+
+    # Migrate launchers patched by the previous module revision.
+    if ! grep -q '^  export PM_RETROPIE_X11=1$' "$launcher"; then
+        sed -i '/^  export PM_RETROPIE_X11_RESOLUTION=/a\  export PM_RETROPIE_X11=1' "$launcher"
     fi
 
     chmod 755 "$launcher"
@@ -181,11 +187,20 @@ if marker not in source:
     source = source.replace(anchor, block + anchor, 1)
 
 old = '            window_flags = sdl2.SDL_WINDOW_FULLSCREEN\n'
-new = '            window_flags = sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP\n'
-if old in source:
-    source = source.replace(old, new, 1)
-elif new not in source:
-    raise SystemExit('PortMaster GUI fullscreen anchor not found')
+old_desktop = '            window_flags = sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP\n'
+new = '''            # RETROPIE_PORTMASTER_X11_FULLSCREEN
+            if _pm_os.environ.get("PM_RETROPIE_X11") == "1":
+                window_flags = sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP
+            else:
+                window_flags = sdl2.SDL_WINDOW_FULLSCREEN
+'''
+if 'RETROPIE_PORTMASTER_X11_FULLSCREEN' not in source:
+    if old in source:
+        source = source.replace(old, new, 1)
+    elif old_desktop in source:
+        source = source.replace(old_desktop, new, 1)
+    else:
+        raise SystemExit('PortMaster GUI fullscreen anchor not found')
 
 path.write_text(source)
 PY
