@@ -120,6 +120,34 @@ function _patch_x11_gui_launcher_portmaster() {
         sed -i '/^    exec startx "\$0" -- :1$/i\    export PM_RETROPIE_STARTED_X=1' "$launcher"
     fi
 
+    # Keep the X11 backend local to PortMaster's own GUI.  The Debian modular
+    # file is also sourced by installed games, so forcing SDL_VIDEODRIVER there
+    # prevents SDL/KMS games from starting directly from a TTY.
+    if ! grep -q '^# RETROPIE_PORTMASTER_X11_ENV$' "$launcher"; then
+        tmp="$(mktemp)" || return 1
+        awk '
+            {
+                print
+                if (!done && $0 ~ /^# RETROPIE_PORTMASTER_X11_START_END$/) {
+                    print ""
+                    print "# RETROPIE_PORTMASTER_X11_ENV"
+                    print "if xrandr --current >/dev/null 2>&1; then"
+                    print "  export XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}\""
+                    print "  export SDL_VIDEODRIVER=x11"
+                    print "fi"
+                    print "# RETROPIE_PORTMASTER_X11_ENV_END"
+                    done=1
+                }
+            }
+            END {
+                if (!done) exit 1
+            }
+        ' "$launcher" > "$tmp" && cat "$tmp" > "$launcher"
+        local patch_ret=$?
+        rm -f "$tmp"
+        [[ "$patch_ret" -eq 0 ]] || return "$patch_ret"
+    fi
+
     # Migrate the previous patch, which ran after get_controls.
     sed -i '/^# RETROPIE_PORTMASTER_X11_SIZE$/,/^# RETROPIE_PORTMASTER_X11_SIZE_END$/d' "$launcher"
     if ! grep -q '^# RETROPIE_PORTMASTER_X11_SIZE$' "$launcher"; then
@@ -376,10 +404,9 @@ function _install_debian_mod_portmaster() {
 # uinput or other device permissions. The PortMaster GUI launcher itself is
 # patched below so that pugwash still runs as the desktop user.
 
-# X11 desktop session used by RetroPie/ES-X.
+# Runtime directory used by SDL/audio helpers. Do not select a video backend
+# here: this modular file is also sourced by every installed PortMaster game.
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-export DISPLAY="${DISPLAY:-:0.0}"
-export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}"
 
 # Let PySDL2 find the native SDL libraries on Debian multiarch systems.
 case "$(uname -m)" in
