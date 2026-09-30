@@ -428,9 +428,39 @@ case "$(uname -m)" in
 esac
 
 # ARMHF ports running on an ARM64 Debian host.
+#
+# Debian's dynamic linker already knows its multiarch directories. Do not
+# prepend them globally to LD_LIBRARY_PATH: individual ports may intentionally
+# provide a private Mesa/EGL/GLES runtime and must remain free to put it first.
+# Export the system locations instead so launchers can opt in when needed.
 if [[ "${PORT_32BIT:-N}" == "Y" ]]; then
-    if [[ -d /usr/lib/arm-linux-gnueabihf ]]; then
-        export LD_LIBRARY_PATH="/usr/lib/arm-linux-gnueabihf:/lib/arm-linux-gnueabihf:${LD_LIBRARY_PATH:-}"
+    if [[ -z "${PM_DEBIAN_ARMHF_LIBS:-}" ]]; then
+        PM_DEBIAN_ARMHF_LIBS=""
+        for _pm_armhf_dir in /usr/lib/arm-linux-gnueabihf /lib/arm-linux-gnueabihf /usr/lib32; do
+            if [[ -d "$_pm_armhf_dir" ]]; then
+                PM_DEBIAN_ARMHF_LIBS="${PM_DEBIAN_ARMHF_LIBS:+${PM_DEBIAN_ARMHF_LIBS}:}${_pm_armhf_dir}"
+            fi
+        done
+        export PM_DEBIAN_ARMHF_LIBS
+        unset _pm_armhf_dir
+    fi
+
+    # Match Batocera's 32-bit PipeWire setup when equivalent Debian multiarch
+    # directories are present. Leave existing explicit port settings untouched.
+    if [[ -z "${SPA_PLUGIN_DIR:-}" ]]; then
+        if [[ -d /usr/lib/arm-linux-gnueabihf/spa-0.2 ]]; then
+            export SPA_PLUGIN_DIR="/usr/lib/arm-linux-gnueabihf/spa-0.2"
+        elif [[ -d /usr/lib32/spa-0.2 ]]; then
+            export SPA_PLUGIN_DIR="/usr/lib32/spa-0.2"
+        fi
+    fi
+
+    if [[ -z "${PIPEWIRE_MODULE_DIR:-}" ]]; then
+        if [[ -d /usr/lib/arm-linux-gnueabihf/pipewire-0.3 ]]; then
+            export PIPEWIRE_MODULE_DIR="/usr/lib/arm-linux-gnueabihf/pipewire-0.3"
+        elif [[ -d /usr/lib32/pipewire-0.3 ]]; then
+            export PIPEWIRE_MODULE_DIR="/usr/lib32/pipewire-0.3"
+        fi
     fi
 fi
 
@@ -448,6 +478,178 @@ pm_platform_helper() {
 EOF
 
     chmod 644 "$mod_file"
+}
+
+
+function _patch_device_info_cache_portmaster() {
+    local device_info_file="$1"
+
+    [[ -f "$device_info_file" ]] || return 0
+
+    # PortMaster 0.2.x builds cache filenames from CFW_NAME/DEVICE_NAME.
+    # Debian reports "Debian GNU/Linux", so an unsanitized slash turns a cache
+    # filename into an unintended directory. Patch only the cache-safe aliases;
+    # leave CFW_NAME untouched so mod_${CFW_NAME}.txt keeps working upstream.
+    if ! python3 - "$device_info_file" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+lines = path.read_text().splitlines()
+found_cfw = False
+found_dev = False
+
+new_cfw = "SAFE_CFW=\"$(printf '%s' \"$CFW_NAME\" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#_#g')\""
+new_dev = "SAFE_DEV=\"$(printf '%s' \"$DEVICE_NAME\" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#_#g')\""
+
+for index, line in enumerate(lines):
+    if line.startswith("SAFE_CFW="):
+        lines[index] = new_cfw
+        found_cfw = True
+    elif line.startswith("SAFE_DEV="):
+        lines[index] = new_dev
+        found_dev = True
+
+if not found_cfw or not found_dev:
+    raise SystemExit("PortMaster SAFE_CFW/SAFE_DEV anchors changed upstream")
+
+path.write_text("\n".join(lines) + "\n")
+PY
+    then
+        md_ret_errors+=(
+            "PortMaster device_info cache sanitization could not be verified; upstream may have changed."
+        )
+    fi
+}
+
+
+function _install_portmaster_doctor() {
+    local pm_dir="$romdir/ports/PortMaster"
+    local doctor="$pm_dir/retropie-debian-doctor.sh"
+
+    [[ -d "$pm_dir" ]] || return 0
+
+    cat > "$doctor" <<'EOF'
+#!/usr/bin/env bash
+
+# PortMaster / RetroPie Debian runtime diagnostics.
+# Read-only apart from refreshing PortMaster's device_info cache.
+set -o pipefail
+
+CONTROL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export controlfolder="$CONTROL_DIR"
+
+if [[ -f "$CONTROL_DIR/device_info.txt" ]]; then
+    # Refresh dynamic capabilities so the report reflects the current host.
+    source "$CONTROL_DIR/device_info.txt" --force
+fi
+
+print_var() {
+    local name="$1"
+    printf '%-24s %s\n' "$name" "${!name:-<unset>}"
+}
+
+echo "===== PORTMASTER / DEBIAN DOCTOR ====="
+date 2>/dev/null || true
+echo
+
+echo "===== HOST ====="
+printf '%-24s %s\n' "uname" "$(uname -a 2>/dev/null)"
+if [[ -f /etc/os-release ]]; then
+    grep -E '^(PRETTY_NAME|VERSION_ID|ID)=' /etc/os-release 2>/dev/null || true
+fi
+if command -v getconf >/dev/null 2>&1; then
+    printf '%-24s %s\n' "glibc" "$(getconf GNU_LIBC_VERSION 2>/dev/null)"
+fi
+echo
+
+echo "===== PORTMASTER CAPABILITIES ====="
+_pm_vars=(
+    PM_VERSION CFW_NAME CFW_VERSION CFW_GLIBC DEVICE_KERNEL_VERSION
+    DEVICE_NAME DEVICE_CPU DEVICE_ARCH GPU_DRIVER GPU_DRIVER_VERSION
+    DEVICE_RAM DEVICE_RAM_MB DEVICE_HAS_SWAP DEVICE_HAS_ZRAM
+    DEVICE_HAS_ARMHF DEVICE_HAS_AARCH64 DEVICE_HAS_X86 DEVICE_HAS_X86_64
+    DISPLAY_WIDTH DISPLAY_HEIGHT DISPLAY_ORIENTATION DEVICE_REFRESH_RATE
+    ANALOG_STICKS ANALOG_TRIGGERS DEVICE_TOUCH DEVICE_HAS_RUMBLE
+    DEVICE_CAPABILITIES
+)
+for _v in "${_pm_vars[@]}"; do
+    print_var "$_v"
+done
+unset _v _pm_vars
+echo
+
+echo "===== MULTIARCH / 32-BIT ====="
+if command -v dpkg >/dev/null 2>&1; then
+    printf '%-24s %s\n' "dpkg arch" "$(dpkg --print-architecture 2>/dev/null)"
+    printf '%-24s %s\n' "foreign arch" "$(dpkg --print-foreign-architectures 2>/dev/null | tr '\n' ' ')"
+fi
+for _p in \
+    /lib/ld-linux-armhf.so.3 \
+    /usr/lib/arm-linux-gnueabihf \
+    /lib/arm-linux-gnueabihf \
+    /usr/lib32; do
+    if [[ -e "$_p" ]]; then
+        printf 'present  %s\n' "$_p"
+    else
+        printf 'missing  %s\n' "$_p"
+    fi
+done
+unset _p
+echo
+
+echo "===== INPUT / UINPUT ====="
+ls -l /dev/uinput 2>/dev/null || echo "/dev/uinput: missing"
+grep -E '^(uinput|joydev|hid_sony|hid_playstation|xpad) ' /proc/modules 2>/dev/null || true
+echo
+
+echo "===== DRM / GPU ====="
+ls -l /dev/dri 2>/dev/null || true
+for _driver_link in /sys/class/drm/renderD*/device/driver /sys/class/drm/card*/device/driver; do
+    [[ -e "$_driver_link" ]] || continue
+    printf '%s -> %s\n' "$_driver_link" "$(readlink -f "$_driver_link" 2>/dev/null)"
+done
+unset _driver_link
+grep -E '^(MemTotal|CmaTotal|CmaFree|SwapTotal):' /proc/meminfo 2>/dev/null || true
+echo
+
+echo "===== EGL / GLES / GL ====="
+if command -v ldconfig >/dev/null 2>&1; then
+    ldconfig -p 2>/dev/null |
+        grep -E 'lib(EGL|GLESv1_CM|GLESv2|GLX|GL|gbm|drm)\.so' |
+        head -n 120 || true
+fi
+
+if command -v eglinfo >/dev/null 2>&1; then
+    echo
+    echo "--- eglinfo -B ---"
+    eglinfo -B 2>/dev/null | head -n 100 || true
+fi
+
+if command -v glxinfo >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]]; then
+    echo
+    echo "--- glxinfo -B ---"
+    glxinfo -B 2>/dev/null | head -n 80 || true
+fi
+echo
+
+echo "===== ARMHF GRAPHICS FILES ====="
+find /usr/lib/arm-linux-gnueabihf /lib/arm-linux-gnueabihf \
+    -maxdepth 2 \
+    \( -name 'libEGL.so*' -o -name 'libGLESv1_CM.so*' -o -name 'libGLESv2.so*' \
+       -o -name 'libgbm.so*' -o -name '*_dri.so' \) \
+    -print 2>/dev/null | sort -u | head -n 160 || true
+echo
+
+echo "===== RELEVANT ENVIRONMENT ====="
+env | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|SDL_|LIBGL_|MESA_|EGL_|GBM_|LD_LIBRARY_PATH|SPA_PLUGIN_DIR|PIPEWIRE_MODULE_DIR|PM_)=' |
+    sort || true
+
+echo
+echo "===== END ====="
+EOF
+
+    chmod 755 "$doctor"
 }
 
 
@@ -503,13 +705,13 @@ function _fix_portmaster_install_portmaster() {
         fi
     fi
 
-    # Debian's CFW name contains a slash. Sanitize only the diagnostic dump
-    # filename so it cannot accidentally become a nonexistent directory.
-    if [[ -f "$device_info_file" ]]; then
-        sed -i \
-            's~cat << __INFO_DUMP__ | tee "$HOME/device_info_${CFW_NAME}_${DEVICE_NAME}.txt"~DEVICE_INFO_FILE="$(printf "%s_%s" "$CFW_NAME" "$DEVICE_NAME" | tr "/[:space:]" "__")"\ncat << __INFO_DUMP__ | tee "$HOME/device_info_${DEVICE_INFO_FILE}.txt"~' \
-            "$device_info_file"
-    fi
+    # Keep PortMaster's dynamic hardware detection intact, but sanitize only
+    # the cache aliases used as filenames on Debian (CFW_NAME contains '/').
+    _patch_device_info_cache_portmaster "$device_info_file"
+
+    # Install a reusable runtime report. It diagnoses capabilities once at the
+    # platform layer instead of adding ad-hoc probes to individual game ports.
+    _install_portmaster_doctor
 
     # Keep the PortMaster GUI in the desktop user's X11 session. Do not run
     # pugwash as root, and manage its reboot marker as the owning user.
