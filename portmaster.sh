@@ -499,8 +499,8 @@ lines = path.read_text().splitlines()
 out = []
 changed = False
 
-modern = 'CACHED_ENV="$CONTROL_DIR/device_info_\${SAFE_CFW//\\//_}_\${SAFE_DEV//\\//_}.env"'
-legacy = 'cat << __INFO_DUMP__ | tee "$HOME/device_info_\${CFW_NAME}_\${DEVICE_NAME}.txt"'
+modern = 'CACHED_ENV="$CONTROL_DIR/device_info_${SAFE_CFW//\\//_}_${SAFE_DEV//\\//_}.env"'
+legacy = 'cat << __INFO_DUMP__ | tee "$HOME/device_info_${CFW_NAME}_${DEVICE_NAME}.txt"'
 
 for line in lines:
     if line.startswith("CACHED_ENV="):
@@ -517,7 +517,7 @@ for line in lines:
         )
         out.append(
             indent +
-            'cat << __INFO_DUMP__ | tee "$HOME/device_info_\${DEVICE_INFO_FILE}.txt"'
+            'cat << __INFO_DUMP__ | tee "$HOME/device_info_${DEVICE_INFO_FILE}.txt"'
         )
         changed = True
         continue
