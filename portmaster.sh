@@ -661,6 +661,13 @@ function _fix_portmaster_install_portmaster() {
     local pmsplash_file="$pm_dir/utils/pmsplash.txt"
 
     _install_debian_mod_portmaster
+
+    # Install platform diagnostics before any fragile upstream GUI patches.
+    # This guarantees that a failed X11/pugwash compatibility patch still
+    # leaves us with a usable doctor report to diagnose the host/runtime.
+    _patch_device_info_cache_portmaster "$device_info_file"
+    _install_portmaster_doctor
+
     _patch_x11_gui_launcher_portmaster || return 1
     _patch_pugwash_x11_portmaster || return 1
 
@@ -682,14 +689,6 @@ function _fix_portmaster_install_portmaster() {
                 "$control_file"
         fi
     fi
-
-    # Keep PortMaster's dynamic hardware detection intact, but sanitize only
-    # the cache aliases used as filenames on Debian (CFW_NAME contains '/').
-    _patch_device_info_cache_portmaster "$device_info_file"
-
-    # Install a reusable runtime report. It diagnoses capabilities once at the
-    # platform layer instead of adding ad-hoc probes to individual game ports.
-    _install_portmaster_doctor
 
     # Keep the PortMaster GUI in the desktop user's X11 session. Do not run
     # pugwash as root, and manage its reboot marker as the owning user.
@@ -804,7 +803,7 @@ function install_bin_portmaster() {
         fi
     fi
 
-    _fix_portmaster_install_portmaster
+    _fix_portmaster_install_portmaster || return 1
     mkdir -p "$md_inst"
 }
 
@@ -843,7 +842,7 @@ function configure_portmaster() {
         fi
     fi
 
-    _fix_portmaster_install_portmaster
+    _fix_portmaster_install_portmaster || return 1
 }
 
 function remove_portmaster() {
