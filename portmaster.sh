@@ -838,6 +838,12 @@ function install_bin_portmaster() {
             "PortMaster installer returned $ret after extraction; continuing because the installed layout is valid."
     fi
 
+    # Apply the Debian/RetroPie adaptation before validating optional helper
+    # binaries. The official installer recreates PortMaster as root; delaying
+    # this step meant a helper mismatch could leave the installation unowned,
+    # unpatched and without the doctor report needed to diagnose the mismatch.
+    _fix_portmaster_install_portmaster || return 1
+
     if ! _gptokeyb_matches_host_portmaster "$pm_dir/gptokeyb2"; then
         case "$(uname -m)" in
             aarch64|arm64)
@@ -859,7 +865,6 @@ function install_bin_portmaster() {
         fi
     fi
 
-    _fix_portmaster_install_portmaster || return 1
     mkdir -p "$md_inst"
 }
 
