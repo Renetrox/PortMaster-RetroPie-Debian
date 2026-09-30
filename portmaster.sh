@@ -493,29 +493,25 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-source = path.read_text()
+lines = path.read_text().splitlines()
+found_cfw = False
+found_dev = False
 
-old_cfw = """SAFE_CFW="$(echo "$CFW_NAME" | tr '[:upper:] ' '[:lower:]_')""""
-old_dev = """SAFE_DEV="$(echo "$DEVICE_NAME" | tr '[:upper:] ' '[:lower:]_')""""
-new_cfw = """SAFE_CFW="$(printf '%s' "$CFW_NAME" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#_#g')""""
-new_dev = """SAFE_DEV="$(printf '%s' "$DEVICE_NAME" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#_#g')""""
+new_cfw = "SAFE_CFW=\"$(printf '%s' \"$CFW_NAME\" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#_#g')\""
+new_dev = "SAFE_DEV=\"$(printf '%s' \"$DEVICE_NAME\" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#_#g')\""
 
-changed = False
+for index, line in enumerate(lines):
+    if line.startswith("SAFE_CFW="):
+        lines[index] = new_cfw
+        found_cfw = True
+    elif line.startswith("SAFE_DEV="):
+        lines[index] = new_dev
+        found_dev = True
 
-if old_cfw in source:
-    source = source.replace(old_cfw, new_cfw, 1)
-    changed = True
-elif new_cfw not in source:
-    raise SystemExit("PortMaster SAFE_CFW anchor changed upstream")
+if not found_cfw or not found_dev:
+    raise SystemExit("PortMaster SAFE_CFW/SAFE_DEV anchors changed upstream")
 
-if old_dev in source:
-    source = source.replace(old_dev, new_dev, 1)
-    changed = True
-elif new_dev not in source:
-    raise SystemExit("PortMaster SAFE_DEV anchor changed upstream")
-
-if changed:
-    path.write_text(source)
+path.write_text("\n".join(lines) + "\n")
 PY
     then
         md_ret_errors+=(
@@ -549,6 +545,109 @@ fi
 print_var() {
     local name="$1"
     printf '%-24s %s\n' "$name" "${!name:-<unset>}"
+}
+
+echo "===== PORTMASTER / DEBIAN DOCTOR ====="
+date 2>/dev/null || true
+echo
+
+echo "===== HOST ====="
+printf '%-24s %s\n' "uname" "$(uname -a 2>/dev/null)"
+if [[ -f /etc/os-release ]]; then
+    grep -E '^(PRETTY_NAME|VERSION_ID|ID)=' /etc/os-release 2>/dev/null || true
+fi
+if command -v getconf >/dev/null 2>&1; then
+    printf '%-24s %s\n' "glibc" "$(getconf GNU_LIBC_VERSION 2>/dev/null)"
+fi
+echo
+
+echo "===== PORTMASTER CAPABILITIES ====="
+_pm_vars=(
+    PM_VERSION CFW_NAME CFW_VERSION CFW_GLIBC DEVICE_KERNEL_VERSION
+    DEVICE_NAME DEVICE_CPU DEVICE_ARCH GPU_DRIVER GPU_DRIVER_VERSION
+    DEVICE_RAM DEVICE_RAM_MB DEVICE_HAS_SWAP DEVICE_HAS_ZRAM
+    DEVICE_HAS_ARMHF DEVICE_HAS_AARCH64 DEVICE_HAS_X86 DEVICE_HAS_X86_64
+    DISPLAY_WIDTH DISPLAY_HEIGHT DISPLAY_ORIENTATION DEVICE_REFRESH_RATE
+    ANALOG_STICKS ANALOG_TRIGGERS DEVICE_TOUCH DEVICE_HAS_RUMBLE
+    DEVICE_CAPABILITIES
+)
+for _v in "${_pm_vars[@]}"; do
+    print_var "$_v"
+done
+unset _v _pm_vars
+echo
+
+echo "===== MULTIARCH / 32-BIT ====="
+if command -v dpkg >/dev/null 2>&1; then
+    printf '%-24s %s\n' "dpkg arch" "$(dpkg --print-architecture 2>/dev/null)"
+    printf '%-24s %s\n' "foreign arch" "$(dpkg --print-foreign-architectures 2>/dev/null | tr '\n' ' ')"
+fi
+for _p in \
+    /lib/ld-linux-armhf.so.3 \
+    /usr/lib/arm-linux-gnueabihf \
+    /lib/arm-linux-gnueabihf \
+    /usr/lib32; do
+    if [[ -e "$_p" ]]; then
+        printf 'present  %s\n' "$_p"
+    else
+        printf 'missing  %s\n' "$_p"
+    fi
+done
+unset _p
+echo
+
+echo "===== INPUT / UINPUT ====="
+ls -l /dev/uinput 2>/dev/null || echo "/dev/uinput: missing"
+grep -E '^(uinput|joydev|hid_sony|hid_playstation|xpad) ' /proc/modules 2>/dev/null || true
+echo
+
+echo "===== DRM / GPU ====="
+ls -l /dev/dri 2>/dev/null || true
+for _driver_link in /sys/class/drm/renderD*/device/driver /sys/class/drm/card*/device/driver; do
+    [[ -e "$_driver_link" ]] || continue
+    printf '%s -> %s\n' "$_driver_link" "$(readlink -f "$_driver_link" 2>/dev/null)"
+done
+unset _driver_link
+grep -E '^(MemTotal|CmaTotal|CmaFree|SwapTotal):' /proc/meminfo 2>/dev/null || true
+echo
+
+echo "===== EGL / GLES / GL ====="
+if command -v ldconfig >/dev/null 2>&1; then
+    ldconfig -p 2>/dev/null |
+        grep -E 'lib(EGL|GLESv1_CM|GLESv2|GLX|GL|gbm|drm)\.so' |
+        head -n 120 || true
+fi
+
+if command -v eglinfo >/dev/null 2>&1; then
+    echo
+    echo "--- eglinfo -B ---"
+    eglinfo -B 2>/dev/null | head -n 100 || true
+fi
+
+if command -v glxinfo >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]]; then
+    echo
+    echo "--- glxinfo -B ---"
+    glxinfo -B 2>/dev/null | head -n 80 || true
+fi
+echo
+
+echo "===== ARMHF GRAPHICS FILES ====="
+find /usr/lib/arm-linux-gnueabihf /lib/arm-linux-gnueabihf \
+    -maxdepth 2 \
+    \( -name 'libEGL.so*' -o -name 'libGLESv1_CM.so*' -o -name 'libGLESv2.so*' \
+       -o -name 'libgbm.so*' -o -name '*_dri.so' \) \
+    -print 2>/dev/null | sort -u | head -n 160 || true
+echo
+
+echo "===== RELEVANT ENVIRONMENT ====="
+env | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|SDL_|LIBGL_|MESA_|EGL_|GBM_|LD_LIBRARY_PATH|SPA_PLUGIN_DIR|PIPEWIRE_MODULE_DIR|PM_)=' |
+    sort || true
+
+echo
+echo "===== END ====="
+EOF
+
+    chmod 755 "$doctor"
 }
 
 echo "===== PORTMASTER / DEBIAN DOCTOR ====="
