@@ -486,25 +486,50 @@ function _patch_device_info_cache_portmaster() {
 
     [[ -f "$device_info_file" ]] || return 0
 
-    # PortMaster 0.2.x derives a cache path from human-readable CFW/device
-    # names. Debian reports "Debian GNU/Linux", so sanitize slash characters
-    # only at the final cache path and leave PortMaster's identity logic intact.
-    if grep -q '^CACHED_ENV=' "$device_info_file"; then
-        sed -i \
-            's|^CACHED_ENV=.*$|CACHED_ENV="$CONTROL_DIR/device_info_${SAFE_CFW//\//_}_${SAFE_DEV//\//_}.env"|' \
-            "$device_info_file" || true
-    fi
+    # Support both legacy (0.1.x) and current (0.2.x) device_info layouts.
+    # Use Python here instead of sed because the legacy replacement itself
+    # contains shell pipelines, which makes delimiter-based substitutions
+    # unnecessarily fragile.
+    python3 - "$device_info_file" <<'PY' || true
+from pathlib import Path
+import sys
 
-    # PortMaster 0.1.x used a diagnostic dump filename directly from CFW_NAME.
-    # Keep compatibility with existing installations while they are upgraded.
-    if grep -q 'cat << __INFO_DUMP__ | tee "\$HOME/device_info_${CFW_NAME}_${DEVICE_NAME}.txt"' "$device_info_file"; then
-        sed -i \
-            's|cat << __INFO_DUMP__ | tee "$HOME/device_info_${CFW_NAME}_${DEVICE_NAME}.txt"|DEVICE_INFO_FILE="$(printf "%s_%s" "$CFW_NAME" "$DEVICE_NAME" | tr "/[:space:]" "__")"\ncat << __INFO_DUMP__ | tee "$HOME/device_info_${DEVICE_INFO_FILE}.txt"|' \
-            "$device_info_file" || true
-    fi
+path = Path(sys.argv[1])
+lines = path.read_text().splitlines()
+out = []
+changed = False
 
-    # Both compatibility paths are deliberately non-fatal: if upstream changes
-    # or fixes them, installation must continue rather than blocking PortMaster.
+modern = 'CACHED_ENV="$CONTROL_DIR/device_info_\${SAFE_CFW//\\//_}_\${SAFE_DEV//\\//_}.env"'
+legacy = 'cat << __INFO_DUMP__ | tee "$HOME/device_info_\${CFW_NAME}_\${DEVICE_NAME}.txt"'
+
+for line in lines:
+    if line.startswith("CACHED_ENV="):
+        out.append(modern)
+        changed = changed or (line != modern)
+        continue
+
+    if legacy in line:
+        indent = line[:len(line) - len(line.lstrip())]
+        out.append(
+            indent +
+            'DEVICE_INFO_FILE="$(printf "%s_%s" "$CFW_NAME" "$DEVICE_NAME" | '
+            "tr '/[:space:]' '__')\""
+        )
+        out.append(
+            indent +
+            'cat << __INFO_DUMP__ | tee "$HOME/device_info_\${DEVICE_INFO_FILE}.txt"'
+        )
+        changed = True
+        continue
+
+    out.append(line)
+
+if changed:
+    path.write_text("\n".join(out) + "\n")
+PY
+
+    # Compatibility patching is deliberately non-fatal: if upstream changes
+    # or fixes these paths, installation must continue rather than be blocked.
     return 0
 }
 
