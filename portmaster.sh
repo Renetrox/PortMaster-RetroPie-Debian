@@ -434,14 +434,16 @@ esac
 # provide a private Mesa/EGL/GLES runtime and must remain free to put it first.
 # Export the system locations instead so launchers can opt in when needed.
 if [[ "${PORT_32BIT:-N}" == "Y" ]]; then
-    PM_DEBIAN_ARMHF_LIBS=""
-    for _pm_armhf_dir in /usr/lib/arm-linux-gnueabihf /lib/arm-linux-gnueabihf; do
-        if [[ -d "$_pm_armhf_dir" ]]; then
-            PM_DEBIAN_ARMHF_LIBS="${PM_DEBIAN_ARMHF_LIBS:+${PM_DEBIAN_ARMHF_LIBS}:}${_pm_armhf_dir}"
-        fi
-    done
-    export PM_DEBIAN_ARMHF_LIBS
-    unset _pm_armhf_dir
+    if [[ -z "${PM_DEBIAN_ARMHF_LIBS:-}" ]]; then
+        PM_DEBIAN_ARMHF_LIBS=""
+        for _pm_armhf_dir in /usr/lib/arm-linux-gnueabihf /lib/arm-linux-gnueabihf /usr/lib32; do
+            if [[ -d "$_pm_armhf_dir" ]]; then
+                PM_DEBIAN_ARMHF_LIBS="${PM_DEBIAN_ARMHF_LIBS:+${PM_DEBIAN_ARMHF_LIBS}:}${_pm_armhf_dir}"
+            fi
+        done
+        export PM_DEBIAN_ARMHF_LIBS
+        unset _pm_armhf_dir
+    fi
 
     # Match Batocera's 32-bit PipeWire setup when equivalent Debian multiarch
     # directories are present. Leave existing explicit port settings untouched.
