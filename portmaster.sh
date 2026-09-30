@@ -486,42 +486,20 @@ function _patch_device_info_cache_portmaster() {
 
     [[ -f "$device_info_file" ]] || return 0
 
-    # PortMaster 0.2.x builds cache filenames from CFW_NAME/DEVICE_NAME.
-    # Debian reports "Debian GNU/Linux", so an unsanitized slash turns a cache
-    # filename into an unintended directory. Patch only the cache-safe aliases;
-    # leave CFW_NAME untouched so mod_${CFW_NAME}.txt keeps working upstream.
-    if ! python3 - "$device_info_file" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-lines = path.read_text().splitlines()
-found_cfw = False
-found_dev = False
-
-new_cfw = "SAFE_CFW=\"$(printf '%s' \"$CFW_NAME\" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#_#g')\""
-new_dev = "SAFE_DEV=\"$(printf '%s' \"$DEVICE_NAME\" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#_#g')\""
-
-for index, line in enumerate(lines):
-    if line.startswith("SAFE_CFW="):
-        lines[index] = new_cfw
-        found_cfw = True
-    elif line.startswith("SAFE_DEV="):
-        lines[index] = new_dev
-        found_dev = True
-
-if not found_cfw or not found_dev:
-    raise SystemExit("PortMaster SAFE_CFW/SAFE_DEV anchors changed upstream")
-
-path.write_text("\n".join(lines) + "\n")
-PY
-    then
-        md_ret_errors+=(
-            "PortMaster device_info cache sanitization could not be verified; upstream may have changed."
-        )
+    # PortMaster currently derives SAFE_CFW/SAFE_DEV from human-readable names.
+    # Debian reports "Debian GNU/Linux", so SAFE_CFW may still contain '/'.
+    # Fix only the final cache path; do not rewrite PortMaster's identity logic.
+    #
+    # Keep this deliberately non-fatal: if upstream changes or fixes the cache
+    # implementation, installation must continue instead of blocking PortMaster.
+    if grep -q '^CACHED_ENV=' "$device_info_file"; then
+        sed -i \
+            's|^CACHED_ENV=.*$|CACHED_ENV="$CONTROL_DIR/device_info_${SAFE_CFW//\//_}_${SAFE_DEV//\//_}.env"|' \
+            "$device_info_file" || true
     fi
-}
 
+    return 0
+}
 
 function _install_portmaster_doctor() {
     local pm_dir="$romdir/ports/PortMaster"
