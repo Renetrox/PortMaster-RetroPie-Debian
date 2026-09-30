@@ -486,18 +486,25 @@ function _patch_device_info_cache_portmaster() {
 
     [[ -f "$device_info_file" ]] || return 0
 
-    # PortMaster currently derives SAFE_CFW/SAFE_DEV from human-readable names.
-    # Debian reports "Debian GNU/Linux", so SAFE_CFW may still contain '/'.
-    # Fix only the final cache path; do not rewrite PortMaster's identity logic.
-    #
-    # Keep this deliberately non-fatal: if upstream changes or fixes the cache
-    # implementation, installation must continue instead of blocking PortMaster.
+    # PortMaster 0.2.x derives a cache path from human-readable CFW/device
+    # names. Debian reports "Debian GNU/Linux", so sanitize slash characters
+    # only at the final cache path and leave PortMaster's identity logic intact.
     if grep -q '^CACHED_ENV=' "$device_info_file"; then
         sed -i \
             's|^CACHED_ENV=.*$|CACHED_ENV="$CONTROL_DIR/device_info_${SAFE_CFW//\//_}_${SAFE_DEV//\//_}.env"|' \
             "$device_info_file" || true
     fi
 
+    # PortMaster 0.1.x used a diagnostic dump filename directly from CFW_NAME.
+    # Keep compatibility with existing installations while they are upgraded.
+    if grep -q 'cat << __INFO_DUMP__ | tee "\$HOME/device_info_${CFW_NAME}_${DEVICE_NAME}.txt"' "$device_info_file"; then
+        sed -i \
+            's|cat << __INFO_DUMP__ | tee "$HOME/device_info_${CFW_NAME}_${DEVICE_NAME}.txt"|DEVICE_INFO_FILE="$(printf "%s_%s" "$CFW_NAME" "$DEVICE_NAME" | tr "/[:space:]" "__")"\ncat << __INFO_DUMP__ | tee "$HOME/device_info_${DEVICE_INFO_FILE}.txt"|' \
+            "$device_info_file" || true
+    fi
+
+    # Both compatibility paths are deliberately non-fatal: if upstream changes
+    # or fixes them, installation must continue rather than blocking PortMaster.
     return 0
 }
 
@@ -755,6 +762,10 @@ function install_bin_portmaster() {
     _prepare_roms_link_portmaster || return 1
     _prepare_es_input_bridge_portmaster || return 1
 
+    # Always refresh the official installer asset. RetroPie-Setup's download
+    # helper may retain an existing destination, which can pin PortMaster to an
+    # older release even when PORTMASTER_INSTALLER_URL points at /latest/.
+    rm -f "$installer"
     download "$PORTMASTER_INSTALLER_URL" "$installer" || return 1
     chmod +x "$installer"
 
