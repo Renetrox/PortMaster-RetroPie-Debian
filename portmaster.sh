@@ -795,7 +795,18 @@ function install_bin_portmaster() {
     chmod +x "$installer"
 
     # The official installer expects to operate from the Ports directory.
-    pushd "$ports_dir" >/dev/null || return 1
+    #
+    # Its generic fallback tries to restart a frontend service named
+    # "emustation" after extraction. RetroPie/ES-X on Debian does not use that
+    # service, and a failed restart can make an otherwise successful install
+    # return non-zero before our Debian adaptation is reapplied. PortMaster
+    # officially supports a no_es_restart marker, so use it here and let
+    # RetroPie-Setup remain in control of the frontend lifecycle.
+    touch "$home/no_es_restart"
+    pushd "$ports_dir" >/dev/null || {
+        rm -f "$home/no_es_restart"
+        return 1
+    }
     env \
         HOME="$home" \
         USER="$__user" \
@@ -805,7 +816,7 @@ function install_bin_portmaster() {
         bash "$installer"
     local ret=$?
     popd >/dev/null || true
-    [[ "$ret" -eq 0 ]] || return "$ret"
+    rm -f "$home/no_es_restart"
 
     _normalize_launcher_name_portmaster || true
 
@@ -813,9 +824,18 @@ function install_bin_portmaster() {
     # roms/ports and its data/control files inside roms/ports/PortMaster.
     if [[ ! -f "$official_launcher" || ! -f "$pm_dir/control.txt" ]]; then
         md_ret_errors+=(
-            "The official installer finished, but PortMaster was not found in $ports_dir."
+            "The official installer did not leave a usable PortMaster installation in $ports_dir."
         )
+        [[ "$ret" -ne 0 ]] && return "$ret"
         return 1
+    fi
+
+    # If extraction produced a valid installation, continue adapting it even
+    # when the upstream wrapper returned non-zero for an unrelated post-install
+    # action. The installed layout is the authoritative success condition here.
+    if [[ "$ret" -ne 0 ]]; then
+        printMsgs "console" \
+            "PortMaster installer returned $ret after extraction; continuing because the installed layout is valid."
     fi
 
     if ! _gptokeyb_matches_host_portmaster "$pm_dir/gptokeyb2"; then
