@@ -16,7 +16,7 @@ Probado actualmente en:
 
 ## Funciones
 
-- Instala PortMaster dentro de RetroPie.
+- Instala la variante oficial **PortMaster Full**, incluyendo todos los runtimes distribuidos por upstream, para que no sea necesario instalarlos manualmente después.
 - Configura X11 y las rutas SDL2 de Debian.
 - Añade soporte multiarch ARMHF en ARM64.
 - Compila `gptokeyb2` para x86_64.
@@ -50,6 +50,8 @@ También puede instalarse directamente con:
 cd ~/RetroPie-Setup
 sudo ./retropie_packages.sh portmaster
 ```
+
+> La instalación utiliza `Install.Full.PortMaster.sh` de la versión oficial más reciente. Es una descarga considerablemente mayor que la instalación base porque incluye los runtimes de PortMaster; esto es intencional para dejar el entorno listo desde el primer uso.
 
 ## Limitaciones
 
