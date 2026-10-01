@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 
 # PortMaster integration for RetroPie-Setup
-# Installs the official PortMaster release directly in RetroPie's Ports folder.
+# Installs the official Full PortMaster release, including all official runtimes, directly in RetroPie's Ports folder.
 
 rp_module_id="portmaster"
 rp_module_desc="PortMaster - Download and manage native Linux ports"
-rp_module_help="Installs PortMaster in RetroPie's Ports directory, maps /roms/ports to the active RetroPie ports folder, bridges ES-X controller settings, and adapts the PortMaster GUI to X11 when RetroPie starts it from a TTY. On non-ARM64 systems it can build a native gptokeyb2 when the bundled helper is incompatible."
+rp_module_help="Installs the official Full PortMaster package with all runtimes in RetroPie's Ports directory, maps /roms/ports to the active RetroPie ports folder, bridges ES-X controller settings, and adapts the PortMaster GUI to X11 when RetroPie starts it from a TTY. On non-ARM64 systems it can build a native gptokeyb2 when the bundled helper is incompatible."
 rp_module_licence="MIT https://github.com/PortsMaster/PortMaster-GUI/blob/main/LICENSE"
 rp_module_section="exp"
 
-PORTMASTER_INSTALLER_URL="https://github.com/PortsMaster/PortMaster-GUI/releases/latest/download/Install.PortMaster.sh"
+PORTMASTER_INSTALLER_URL="https://github.com/PortsMaster/PortMaster-GUI/releases/latest/download/Install.Full.PortMaster.sh"
 GPTOKEYB2_REPO="https://github.com/PortsMaster/gptokeyb2.git"
 
 function _update_hook_portmaster() {
@@ -765,7 +765,7 @@ function _fix_portmaster_install_portmaster() {
         # Ownership must be corrected before the desktop launcher runs.
         chown -R "$target_user:$target_group" "$pm_dir"
         chown "$target_user:$target_group" \
-            "$ports_dir/Install.PortMaster.sh" \
+            "$ports_dir/Install.Full.PortMaster.sh" \
             "$official_launcher" 2>/dev/null || true
     fi
 
@@ -781,7 +781,7 @@ function _fix_portmaster_install_portmaster() {
 function install_bin_portmaster() {
     local ports_dir="$romdir/ports"
     local pm_dir="$ports_dir/PortMaster"
-    local installer="$ports_dir/Install.PortMaster.sh"
+    local installer="$ports_dir/Install.Full.PortMaster.sh"
     local official_launcher="$ports_dir/PortMaster.sh"
 
     _prepare_roms_link_portmaster || return 1
@@ -790,7 +790,9 @@ function install_bin_portmaster() {
     # Always refresh the official installer asset. RetroPie-Setup's download
     # helper may retain an existing destination, which can pin PortMaster to an
     # older release even when PORTMASTER_INSTALLER_URL points at /latest/.
-    rm -f "$installer"
+    # Remove both the current Full installer and the legacy base installer
+    # so upgrades from older versions do not leave a misleading stale file.
+    rm -f "$installer" "$ports_dir/Install.PortMaster.sh"
     download "$PORTMASTER_INSTALLER_URL" "$installer" || return 1
     chmod +x "$installer"
 
@@ -928,6 +930,7 @@ function remove_portmaster() {
     # Remove PortMaster itself while preserving every installed game/port.
     rm -rf "$pm_dir"
     rm -f \
+        "$ports_dir/Install.Full.PortMaster.sh" \
         "$ports_dir/Install.PortMaster.sh" \
         "$ports_dir/PortMaster.sh"
 
