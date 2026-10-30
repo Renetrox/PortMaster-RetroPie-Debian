@@ -196,6 +196,11 @@ import sys
 
 path = Path(sys.argv[1])
 source = path.read_text()
+# PortMaster 2026.10+ moved its GUI into pylibs/pugwash/app.py. Its modular
+# GUI already reads the active SDL display mode; the old pugwash patch does
+# not apply to the bootstrap script, so retain upstream behaviour here.
+if 'from pugwash.main import main' in source:
+    raise SystemExit(0)
 marker = '        # RETROPIE_PORTMASTER_X11_RESOLUTION\n'
 if marker not in source:
     anchor = '        # Create the window\n'
@@ -778,6 +783,137 @@ function _fix_portmaster_install_portmaster() {
     chmod 755 "$official_launcher" 2>/dev/null || true
 }
 
+
+# RetroPie-Setup calls install_bin again for "Update from source". Avoid
+# downloading Install.Full.PortMaster.sh (~600 MB) for an existing installation.
+# Official PortMaster.zip contains only the application, not the runtimes.
+function _update_existing_portmaster() {
+    local ports_dir="$romdir/ports"
+    local pm_dir="$ports_dir/PortMaster"
+    local launcher="$ports_dir/PortMaster.sh"
+    local current="" latest="" url="" md5=""
+    local manifest="" archive="" stage=""
+
+    current="$(sed -nE "s/^PORTMASTER_VERSION[[:space:]]*=[[:space:]]*['\"]([^'\"]+)['\"].*/\1/p" "$pm_dir/pugwash" | head -n 1)"
+    if [[ ! "$current" =~ ^[0-9]{4}[.-][0-9]{2}[.-][0-9]{2}-[0-9]{4}$ ]]; then
+        printMsgs "console" "Cannot identify installed PortMaster version; skipping automatic reinstall."
+        return 0
+    fi
+
+    manifest="$(mktemp)" || return 1
+    if ! curl -fsSL --retry 2 --connect-timeout 10 \
+        "https://github.com/PortsMaster/PortMaster-GUI/releases/latest/download/version.json" \
+        -o "$manifest"; then
+        rm -f "$manifest"
+        printMsgs "console" "Cannot check PortMaster releases; preserving installed $current."
+        return 0
+    fi
+
+    latest="$(jq -r '.stable.version // empty' "$manifest")"
+    url="$(jq -r '.stable.url // empty' "$manifest")"
+    md5="$(jq -r '.stable.md5 // empty' "$manifest")"
+    rm -f "$manifest"
+
+    if [[ ! "$latest" =~ ^[0-9]{4}[.-][0-9]{2}[.-][0-9]{2}-[0-9]{4}$ ||
+          ! "$url" =~ ^https://github\.com/PortsMaster/PortMaster-GUI/releases/download/[^/]+/PortMaster\.zip$ ||
+          ! "$md5" =~ ^[0-9a-fA-F]{32}$ ]]; then
+        printMsgs "console" "Invalid PortMaster version metadata; preserving installed $current."
+        return 0
+    fi
+
+    if [[ "$current" == "$latest" ||
+          "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -n 1)" == "$current" ]]; then
+        printMsgs "console" "PortMaster $current is current; nothing to download."
+        return 0
+    fi
+
+    printMsgs "console" "PortMaster $current -> $latest: updating the application without runtimes."
+    archive="$(mktemp --suffix=.zip)" || return 1
+    stage="$(mktemp -d "$ports_dir/.portmaster-update.XXXXXXXX")" || {
+        rm -f "$archive"
+        return 1
+    }
+
+    if ! curl -fsSL --retry 2 --connect-timeout 10 -o "$archive" "$url" ||
+       [[ "$(md5sum "$archive" | awk '{print $1}')" != "$md5" ]]; then
+        printMsgs "console" "PortMaster.zip download or checksum failed. Installation unchanged."
+        rm -f "$archive"
+        rm -rf "$stage"
+        return 1
+    fi
+
+    # Validate CRC and reject unexpected paths before changing installed files.
+    if ! python3 - "$archive" "$stage" <<'PY'
+from pathlib import Path, PurePosixPath
+import stat
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as zf:
+    for info in zf.infolist():
+        name = PurePosixPath(info.filename)
+        if (name.is_absolute() or ".." in name.parts or not name.parts
+                or name.parts[0] != "PortMaster"
+                or stat.S_ISLNK(info.external_attr >> 16)):
+            raise SystemExit("Unsafe PortMaster.zip entry: " + info.filename)
+        if len(name.parts) > 2 and (name.parts[1] in ("config", "themes")
+                or name.parts[1] == "libs" and name.name.endswith(".squashfs")):
+            raise SystemExit("Unexpected user data in PortMaster.zip: " + info.filename)
+    if zf.testzip() is not None:
+        raise SystemExit("Damaged PortMaster.zip")
+    zf.extractall(sys.argv[2])
+PY
+    then
+        rm -f "$archive"
+        rm -rf "$stage"
+        return 1
+    fi
+    rm -f "$archive"
+
+    if [[ ! -f "$stage/PortMaster/pugwash" ||
+          ! -f "$stage/PortMaster/PortMaster.sh" ||
+          ! -f "$stage/PortMaster/control.txt" ]]; then
+        printMsgs "console" "Incomplete PortMaster archive; installed version preserved."
+        rm -rf "$stage"
+        return 1
+    fi
+
+    # A future upstream layout must not break the supported Debian GUI patch.
+    if ! grep -q -e 'from pugwash.main import main' -e '# Create the window' \
+          "$stage/PortMaster/pugwash"; then
+        printMsgs "console" "Unrecognized PortMaster layout; no files changed."
+        rm -rf "$stage"
+        return 1
+    fi
+
+    # PortMaster.zip deliberately excludes configuration, themes, and runtimes.
+    # The overlay does not delete previously installed games or libraries.
+    if ! cp -a "$stage/PortMaster/." "$pm_dir/" ||
+       ! install -m 755 "$stage/PortMaster/PortMaster.sh" "$launcher"; then
+        rm -rf "$stage"
+        md_ret_errors+=("PortMaster application update failed; check installation.")
+        return 1
+    fi
+    rm -rf "$stage"
+
+    _fix_portmaster_install_portmaster || return 1
+
+    # Reapply the native helper built by this RetroPie module, when present.
+    if [[ -x "$md_inst/gptokeyb2.native" ]]; then
+        _install_native_gptokeyb2_portmaster || _build_native_gptokeyb2_portmaster || return 1
+        _fix_portmaster_install_portmaster || return 1
+    elif ! _gptokeyb_matches_host_portmaster "$pm_dir/gptokeyb2"; then
+        case "$(uname -m)" in
+            aarch64|arm64)
+                md_ret_errors+=("Updated PortMaster includes an incompatible ARM64 gptokeyb2.")
+                return 1
+                ;;
+            *) _build_native_gptokeyb2_portmaster || return 1 ;;
+        esac
+    fi
+    return 0
+}
+
 function install_bin_portmaster() {
     local ports_dir="$romdir/ports"
     local pm_dir="$ports_dir/PortMaster"
@@ -786,6 +922,11 @@ function install_bin_portmaster() {
 
     _prepare_roms_link_portmaster || return 1
     _prepare_es_input_bridge_portmaster || return 1
+
+    if [[ -f "$official_launcher" && -f "$pm_dir/control.txt" && -f "$pm_dir/pugwash" ]]; then
+        _update_existing_portmaster
+        return $?
+    fi
 
     # Always refresh the official installer asset. RetroPie-Setup's download
     # helper may retain an existing destination, which can pin PortMaster to an
