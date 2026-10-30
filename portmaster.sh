@@ -745,6 +745,18 @@ function _fix_portmaster_install_portmaster() {
             "$official_launcher"
     fi
 
+    # PortMaster 2026.10+ moved GUI launching from PortMaster.sh to
+    # utils/pm_launch.txt. Keep the Debian non-root GUI and X11 adaptations.
+    local shared_launcher="$pm_dir/utils/pm_launch.txt"
+    if [[ -f "$shared_launcher" ]]; then
+        sed -i \
+            -e 's|^  \$ESUDO ./pugwash \$PORTMASTER_CMDS$|  ./pugwash $PORTMASTER_CMDS|' \
+            -e 's|^\$ESUDO rm -f "\${controlfolder}/.pugwash-reboot"$|rm -f "\${controlfolder}/.pugwash-reboot"|' \
+            -e 's|^  \$ESUDO chmod -R +x \.$|  chmod -R a+x .|' \
+            -e 's|^  export PYSDL2_DLL_PATH="/usr/lib"$|  export PYSDL2_DLL_PATH="\${PYSDL2_DLL_PATH:-/usr/lib}"|' \
+            "$shared_launcher"
+    fi
+
     # The splash stop marker is user-owned on Debian, so remove it directly
     # instead of starting a root-owned GUI state.
     if [[ -f "$pmsplash_file" ]]; then
